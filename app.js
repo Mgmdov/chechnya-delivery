@@ -422,7 +422,7 @@ function vAPeople() {
     <td>${u.role === 'courier' ? 'Курьер' : 'Заказчик'}${u.role === 'courier' && u.is_working ? ' <span class="chip ok">на линии</span>' : ''}</td>
     <td>${u.role === 'courier' ? (u.free_until >= S.today ? 'бесплатно до ' + fmtDate(u.free_until) : 'платный') : ''}</td>
     <td>${u.is_blocked ? '<span class="chip bad">заблокирован</span>' : ''}</td>
-    <td><div class="row" style="justify-content:flex-start;gap:6px;flex-wrap:wrap"><button class="btn sm ghost" data-act="block" data-id="${u.id}" data-v="${u.is_blocked ? 0 : 1}">${u.is_blocked ? 'Разблокировать' : 'Заблокировать'}</button>${u.role === 'courier' ? `<button class="btn sm ghost" data-act="free7" data-id="${u.id}" data-d="${u.free_until || ''}">+7 дней бесплатно</button>` : ''}</div></td></tr>`).join('');
+    <td><div class="row" style="justify-content:flex-start;gap:6px;flex-wrap:wrap"><button class="btn sm ghost" data-act="block" data-id="${u.id}" data-v="${u.is_blocked ? 0 : 1}">${u.is_blocked ? 'Разблокировать' : 'Заблокировать'}</button>${u.role === 'courier' ? `<button class="btn sm ghost" data-act="free7" data-id="${u.id}" data-d="${u.free_until || ''}">+7 дней бесплатно</button><button class="btn sm ghost" data-act="freeEnd" data-id="${u.id}">Убрать бесплатные дни</button>` : ''}<button class="btn sm ghost" data-act="makeAdmin" data-id="${u.id}" data-n="${esc(u.full_name)}">Сделать админом</button></div></td></tr>`).join('');
   return `<div class="screen">${adminHead('Люди')}<div class="scroll"><table class="table"><thead><tr><th>Имя</th><th>Роль</th><th>Период</th><th></th><th>Действия</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty">Пока никого</td></tr>'}</tbody></table></div></div>`;
 }
 function vAVillages() {
@@ -518,6 +518,21 @@ const acts = {
     const { error } = await sb.from('profiles').update({ free_until: val }).eq('id', d.id);
     if (error) return toast(errText(error));
     toast('Бесплатно до ' + fmtDate(val));
+    await refresh(); render();
+  },
+  async freeEnd(d) {
+    const y = new Date(S.today + 'T00:00:00'); y.setDate(y.getDate() - 1);
+    const val = y.getFullYear() + '-' + String(y.getMonth() + 1).padStart(2, '0') + '-' + String(y.getDate()).padStart(2, '0');
+    const { error } = await sb.from('profiles').update({ free_until: val }).eq('id', d.id);
+    if (error) return toast(errText(error));
+    toast('Бесплатный период снят');
+    await refresh(); render();
+  },
+  async makeAdmin(d) {
+    if (!confirm('Сделать администратором: ' + d.n + '? Он увидит оплаты, коды и всех людей.')) return;
+    const { error } = await sb.from('profiles').update({ role: 'admin', is_working: false }).eq('id', d.id);
+    if (error) return toast(errText(error));
+    toast('Теперь администратор: ' + d.n);
     await refresh(); render();
   },
   async toggleVillage(d) {
