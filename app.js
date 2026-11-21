@@ -216,7 +216,7 @@ async function loadCourier() {
   S.today = t.data;
   const [{ data: sh }, { data: pay }, { data: co }, { data: p }] = await Promise.all([
     sb.from('shifts').select('id').eq('work_date', S.today).limit(1),
-    sb.from('payments').select('*').eq('work_date', S.today).maybeSingle(),
+    sb.from('payments').select('id,work_date,amount,status,code_used_at').eq('work_date', S.today).maybeSingle(),
     sb.rpc('get_courier_orders'),
     sb.from('profiles').select('*').eq('id', S.profile.id).maybeSingle(),
   ]);
@@ -230,9 +230,7 @@ async function loadAdmin() {
   const t = await sb.rpc('server_today');
   S.today = t.data;
   if (S.tab === 'pay') {
-    let q = sb.from('payments').select('*, courier:profiles!payments_courier_id_fkey(full_name,phone)').order('created_at', { ascending: false }).limit(100);
-    if (a.payFilter !== 'all') q = q.eq('status', a.payFilter);
-    a.payments = (await q).data || [];
+    a.payments = (await sb.rpc('admin_payments', { p_status: a.payFilter })).data || [];
   } else if (S.tab === 'aorders') {
     a.orders = (await sb.from('orders').select('*, customer:profiles!orders_customer_id_fkey(full_name,phone), courier:profiles!orders_courier_id_fkey(full_name), settlement:settlements(name)').order('id', { ascending: false }).limit(100)).data || [];
   } else if (S.tab === 'people') {
@@ -358,7 +356,7 @@ function payBlock() {
   const pay = S.payToday;
   if (!pay) return `<div class="card"><div class="strong">Оплата дня: ${DAY_PRICE} ₽</div><p class="muted">Первые 7 дней были бесплатными. Теперь работа на линии стоит ${DAY_PRICE} ₽ в день.</p><button class="btn" data-act="openPay">Оплатить ${DAY_PRICE} ₽</button></div>`;
   if (pay.status === 'pending') return `<div class="card"><div class="row"><div class="strong">Оплата дня: ${DAY_PRICE} ₽</div><span class="chip warn">Ждём подтверждения</span></div><p class="muted">Администратор проверит перевод и подтвердит. Потом здесь появится код.</p><button class="btn sm ghost" data-act="reload">Проверить</button></div>`;
-  if (pay.code && !pay.code_used_at) return `<div class="card"><div class="row"><div class="strong">Оплата подтверждена</div><span class="chip ok">Готово</span></div><div class="muted">Ваш код на сегодня:</div><div class="code" data-code="${esc(pay.code)}">${esc(pay.code)}</div></div>`;
+  if (pay.status === 'confirmed' && !pay.code_used_at) return `<div class="card"><div class="row"><div class="strong">Оплата подтверждена</div><span class="chip ok">Готово</span></div><p class="muted">Администратор назовёт вам код по телефону. Введите его выше и нажмите «Работать».</p></div>`;
   return '';
 }
 function startCard() {
@@ -367,9 +365,11 @@ function startCard() {
   const left = freeLeft();
   const free = left > 0;
   const needPay = !S.shiftToday && !free;
-  const ready = S.shiftToday || free || (S.payToday && S.payToday.code && !S.payToday.code_used_at);
+  const confirmed = !!(S.payToday && S.payToday.status === 'confirmed' && !S.payToday.code_used_at);
+  const ready = S.shiftToday || free || confirmed;
   return `<div class="card"><div class="field"><label for="w-s">Село, в котором работаете</label><select id="w-s">${villageOptions(sel)}</select></div>
     ${S.shiftToday ? '<div class="info">Сегодняшний день уже оплачен или бесплатный.</div>' : free ? `<div class="info">${ico('info', 20, 'var(--accent)')}<div>Бесплатный период: осталось дней ${left}.</div></div>` : ''}
+    ${needPay && confirmed ? '<div class="field"><label for="w-code">Код от администратора</label><input id="w-code" autocomplete="off" autocapitalize="characters" placeholder="Например, 7K4M9QXA"></div>' : ''}
     <button class="btn" data-act="startWork" ${ready ? '' : 'disabled'}>Работать</button></div>${needPay ? payBlock() : ''}`;
 }
 function vWork() {
@@ -405,9 +405,9 @@ function vMine() {
 const adminHead = (t, extra = '') => `<div class="row wrap" style="align-items:flex-end"><div><h1 class="title">${t}</h1></div>${extra}</div>`;
 function vAPay() {
   const a = S.adm;
-  const rows = a.payments.map((p) => `<tr><td class="strong">${esc(p.courier?.full_name || '')}<div class="muted" style="font-size:12px">${esc(p.courier?.phone || '')}</div></td><td>${fmtDate(p.work_date)}</td><td>${p.amount} ₽</td>
+  const rows = a.payments.map((p) => `<tr><td class="strong">${esc(p.courier_name || '')}<div class="muted" style="font-size:12px">${esc(p.courier_phone || '')}</div></td><td>${fmtDate(p.work_date)}</td><td>${p.amount} ₽</td>
     <td>${p.status === 'pending' ? '<span class="chip warn">Ждёт подтверждения</span>' : `<span class="chip ok">Подтверждено</span>${p.code_used_at ? ' <span class="chip">код использован</span>' : ''}`}</td>
-    <td>${p.status === 'pending' ? `<button class="btn sm" data-act="confirmPay" data-id="${p.id}">Подтвердить</button>` : `<span class="strong" style="letter-spacing:1px">${esc(p.code || '')}</span>`}</td></tr>`).join('');
+    <td>${p.status === 'pending' ? `<button class="btn sm" data-act="confirmPay" data-id="${p.id}">Подтвердить</button>` : `<span class="strong" style="letter-spacing:2px;font-size:20px;color:var(--accent)">${esc(p.code || '')}</span>${p.code_used_at ? '' : '<div class="muted" style="font-size:12px">Назовите курьеру</div>'}`}</td></tr>`).join('');
   return `<div class="screen">${adminHead('Оплаты курьеров')}
     <p class="sub">Подтвердите оплату, и курьер получит одноразовый код на этот день.</p>
     <div class="chips">${[['pending', 'Ждут подтверждения'], ['confirmed', 'Подтверждены'], ['all', 'Все']].map(([k, l]) => `<button data-act="payFilter" data-f="${k}" class="${a.payFilter === k ? 'on' : ''}">${l}</button>`).join('')}</div>
@@ -480,7 +480,7 @@ const acts = {
   },
   async startWork() {
     const sel = Number($('#w-s').value);
-    const code = S.payToday?.code && !S.payToday.code_used_at ? S.payToday.code : null;
+    const code = ($('#w-code')?.value || '').trim() || null;
     const { error } = await sb.rpc('start_work', { p_settlement: sel, p_code: code });
     if (error) return toast(errText(error));
     village.set(sel);
@@ -502,7 +502,8 @@ const acts = {
   async confirmPay(d) {
     const { data, error } = await sb.rpc('confirm_payment', { p_id: Number(d.id) });
     if (error) return toast(errText(error));
-    toast('Код курьера: ' + data);
+    S.adm.payFilter = 'confirmed';
+    toast('Код: ' + data + '. Назовите его курьеру');
     await refresh(); render();
   },
   async block(d) {
@@ -592,6 +593,7 @@ setInterval(async () => {
   const a = document.activeElement;
   if (a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName)) return;
   if (S.view === 'new') return;
+  if ($('#w-code')?.value) return;
   await refresh();
   render();
 }, 10000);
